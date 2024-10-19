@@ -1,0 +1,506 @@
+---
+title: "Analysis and Visualization of Atlantic Hurricane Data (1975-2022)"
+subtitle: "DATA 612"
+author: "Conie O'Malley & Diana Klinger"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    number_sections: yes
+    includes:
+      after_body:
+    toc: yes
+    toc_float: yes
+    code_download: yes
+    theme: united
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+library(tidyverse)
+library(DT)
+library(corrplot)
+data("storms")
+```
+
+```{r Variable Totals}
+stormsData <- storms
+
+rows <- nrow(stormsData)
+col <- ncol(stormsData)
+```
+
+# Introduction
+
+This project aims to analyze and visualize the NOAA Atlantic hurricane database best track data, focusing on storm tracks from 1975 to 2022. The focus of our research is to analyze the question:
+
+**Are hurricanes increasing in strength over time?**
+
+We intend to measure strength using wind speed variables, but have additional variables of category, storm force diameter, and status to aid in our assessment and understand what the full scope of the data presents.
+
+***
+
+# Data Overview
+
+The `storms` dataset includes detailed information about storm positions and attributes, providing insights into the behavior and impact of tropical storms and hurricanes. The dataset contains `r rows` observations and `r col` variables, including storm name, date, time, location, storm classification, category, wind speed, air pressure, and diameters of tropical storm and hurricane force winds.
+
+The data can be found on the [NOAA](https://www.nhc.noaa.gov/data/#hurdat) website.
+
+The data is also available as a part of the dplyr package.
+
+***
+
+# Data Description {.tabset}
+
+## Description
+
+The variables in the dataset are as follows:
+
+• *name:* The name of the storm
+
+• *year, month, day:* The date of the report
+
+• *hour:* The hour of the report (in UTC)
+
+• *lat, long:* The latitude and longitude of the storm center
+
+• *status:* The classification of the storm (Tropical Depression, Tropical Storm, or Hurricane)
+
+• *category:* The Saffir-Simpson hurricane category calculated from wind speed
+
+• *wind:* The storm's maximum sustained wind speed (in knots)
+
+• *pressure:* The air pressure at the storm's center (in millibars)
+
+• *tropicalstorm_force_diameter:* The diameter of the area experiencing tropical storm strength winds (available starting in 2004)
+
+• *hurricane_force_diameter:* The diameter of the area experiencing hurricane strength winds (available starting in 2004)
+
+## Summary Statistics
+
+Below is the summary statistics and first few rows for the `storms` dataset.
+
+```{r Summary Statistics}
+summary_stormsData <- summary(stormsData)
+
+summary_stormsData
+
+storm_head <- head(stormsData)
+```
+
+`r datatable(storm_head)`
+
+## Tibble
+
+```{r tibble}
+# determine if our data is stored in a tibble
+if(is_tibble(stormsData)) {
+  print("Dataset is a tibble.")
+  } else {
+      print("Dataset is not a tibble.")
+  }
+```
+
+#  {-}
+
+***
+
+# Data Preprocessing {.tabset}
+
+## Data Cleaning
+
+We combined multiple date-related variables (year, month, day, and hour) into a single **datetime** variable. This new variable consolidates all the date and time information into a single column for easier analysis.
+
+Next, we refined our dataset by selecting only the essential variables for our analysis and filtered the observations to include only the "hurricane" storm status. The first ten rows are displayed below.
+
+```{r Data Cleaning}
+# mutate date variables into a single variable
+stormsData <- stormsData %>%
+  mutate(datetime = make_datetime(year, month, day, hour))
+
+# remove unnecessary variables 
+stormsData <- stormsData %>%
+  select(name, status, year, month, hour, category, 
+         wind, pressure, lat, long, datetime, 
+         hurricane_force_diameter) %>%
+  filter(status == "hurricane")
+
+ten <- head(stormsData, 10)
+```
+
+`r datatable(ten)`
+
+## Duplicates
+
+```{r Looking for Duplicates}
+duplicates <- stormsData %>%
+  group_by(name, datetime, lat, long) %>%
+  filter(n() > 1) %>%
+  ungroup() %>%
+  distinct()
+
+duplicate_count <- nrow(duplicates)
+```
+
+We performed a search for duplicates. The following `r duplicate_count` records in the dataset have the same storm name, date, time, and location, suggesting that these entries are duplicates.
+
+`r datatable(duplicates)`
+
+## Search for NA's
+
+We performed a search for "NA" values. The "NA" values we discovered were part of the **hurricane_force_diameter** variable. This will not impede our project, we will filter our "NA" values during our calculations in our analysis.
+
+```{r NA search}
+# checking the number of NA values in the data set
+overallNA_count <- stormsData %>%
+  summarise_all(~sum(is.na(.)))
+overallNA_count
+```
+
+
+***
+
+# Data Visualizations
+
+```{r Storm Windspeed Calculations, message=FALSE, warning=FALSE}
+# calculate wind speed by storm 
+stormWindSpeed <- stormsData %>%
+  group_by(name, year) %>%
+  summarise(meanWindSpeed = mean(wind, na.rm = TRUE)) %>%
+  arrange(year)
+
+# calculate average strength of storm per year over time
+stormStrengthPerYear <- stormWindSpeed %>%
+  group_by(year) %>%
+  summarise(meanWindSpeedPerYear = mean(meanWindSpeed)) %>%
+  arrange(year)
+```
+
+## Wind Speed {.tabset}
+
+### Wind Speed by Year
+
+```{r Frequency Distribution of Windspeed by year}
+ggplot(stormsData, aes(x = wind, fill = factor(year))) +
+  geom_histogram(binwidth = 10) +
+  labs(title = "Distribution of Wind Speeds", 
+       x = "Wind Speed (knots)", 
+       y = "Frequency", 
+       fill = "Year") +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5, color = "darkgreen"), 
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(color = "darkgreen", hjust = 0.5,))
+```
+
+### Wind Speed by Storm
+
+```{r Storm Strength by Windspeed Visualizations, message=FALSE, warning=FALSE}
+stormStrengthPerYear_plot <- ggplot(data = stormStrengthPerYear, 
+                                    mapping = aes(x = year, 
+                                                  y = meanWindSpeedPerYear, 
+                                                  colour = year)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "darkblue") +
+  labs(title = "Average Wind Speed per Year", 
+       x = "Year", 
+       y = "Average Wind Speed (mph)") +
+  theme(plot.title = element_text(hjust = 0.5, color = "darkgreen"), 
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(" ", color = "darkgreen"))
+
+stormStrengthPerYear_plot
+```
+
+### Wind Speeds by Month
+
+```{r Boxplot of Wind Speeds by Month}
+ggplot(stormsData, aes(x = factor(month), y = wind)) +
+  geom_boxplot(outlier.colour = "red", fill = "lightblue") +
+  labs(title = "Distribution of Wind Speeds by Month", 
+       x = "Month", 
+       y = "Wind Speed (knots)") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, color = "darkgreen"), 
+        axis.title = element_text(color = "darkgreen"))
+```
+
+## Air Pressure{.tabset}
+
+```{r Storm Pressure Calculations}
+# calculate pressure by storm
+stormPressure <- stormsData %>%
+  group_by(name, year) %>%
+  summarise(meanPressure = mean(pressure)) %>%
+  arrange(year)
+
+# calculate average pressure of storm per year over time
+stormPressurePerYear <- stormPressure %>%
+  group_by(year) %>%
+  summarise(meanPressurePerYear = mean(meanPressure)) %>%
+  arrange(year)
+```
+
+### Pressure by Storm Category
+
+```{r Boxplot of Pressure by Storm Category}
+ggplot(stormsData, aes(x = factor(category), y = pressure)) +
+  geom_boxplot(outlier.colour = "red", fill = "lightblue") +
+  labs(title = "Distribution of Air Pressure by Storm Category", 
+       x = "Storm Category", 
+       y = "Pressure (millibars)") +
+  theme_minimal() + 
+  theme(axis.title = element_text(color = "darkgreen"), 
+        plot.title = element_text(hjust = 0.5, color = "darkgreen")) 
+```
+
+### Storm strength by pressure
+
+```{r Storm Strength by Pressure Visualizations, message=FALSE, warning=FALSE}
+stormPressurePerYear_plot <- ggplot(data = stormPressurePerYear, 
+                                    mapping = aes(x = year, 
+                                                  y = meanPressurePerYear,
+                                                  colour = year)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "darkblue") +
+  labs(title = "Average Air Pressure per Year", 
+       x = "Year", 
+       y = "Average Air Pressure (mbar)") +
+  theme(plot.title = element_text(hjust = 0.5, color = "darkgreen"),
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(" "))
+
+stormPressurePerYear_plot
+```
+
+## Hurricanes {.tabset}
+
+### Average Hurricane by Category per Year
+
+```{r Average Hurricane by Category per Year}
+# average hurricane category per year
+avg_category_per_year <- stormsData %>%
+  group_by(year) %>%
+  summarise(avg_category = mean(category, na.rm = TRUE))
+
+ggplot(avg_category_per_year, aes(x = year, y = avg_category)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Average Hurricane Category by Year", 
+       x = "Year",
+       y = "Average Hurricane Category") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, color = "darkgreen"),
+        axis.title = element_text(color = "darkgreen"))
+```
+
+```{r Hurricane Strength by Category Visualizations}
+# calculate hurricane strength by category by year
+hurricaneStrength <- stormsData %>%
+  filter(status == "hurricane") %>%
+  group_by(category, year) %>%
+  summarise(count = n()) %>%
+  arrange(year)
+
+# calculate average hurricane strength per year
+hurricaneStrengthPerYear <- hurricaneStrength %>%
+  group_by(year) %>%
+  summarise(meanStrength = mean(category))
+```
+
+### Hurricanes per year
+
+``` {r Number of Hurricanes by Year}
+# maximum wind speed per year
+max_wind_per_year <- stormsData %>%
+  group_by(year) %>%
+  summarise(max_wind = max(wind, na.rm = TRUE))
+
+storm_stats <- stormsData %>% 
+  group_by(year) %>%
+  summarise(storm_count = n())
+
+ggplot(storm_stats, aes(x = year, y = storm_count, color = year)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Hurricanes by Year", 
+       x = "Year", 
+       y = "Number of Storms") +
+  theme_minimal() + 
+  theme(plot.title = element_text(color = "darkgreen", hjust = 0.5),
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(color = "darkgreen", hjust = 0.5))
+```
+
+## Comparison Charts{.tabset}
+
+### Pressure & storm strength relationship
+
+```{r Pressure and Storm Strength Relationship Visualizations, warning=FALSE}
+# combining previously calculated variables to create new visualizations
+combinedPressureAndWindData <- stormStrengthPerYear %>%
+  left_join(stormPressurePerYear, by = "year")
+
+combinedPressureAndWind_plot <- ggplot(data = combinedPressureAndWindData,
+                                       mapping = aes(x = year)) +
+  geom_line(aes(y = meanWindSpeedPerYear, color = "Wind Speed")) +
+  geom_line(aes(y = meanPressurePerYear/10, color = "Air Pressure")) + 
+  scale_y_continuous(name = "Average Wind Speed", 
+                     sec.axis = sec_axis(~ . * 10, 
+                                         name = "Average Air Pressure")) +
+  labs(title = "Comparison of Average Wind Speed and Air Pressure per Year",
+       x = "Year", 
+       color = "Variable") +
+  theme_minimal() +
+  theme(plot.title = element_text(color = "darkgreen", hjust = 0.5),
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(" "))
+
+combinedPressureAndWind_plot
+```
+
+### Wind, Pressure, and Hurricane Force Diameter Correlation
+
+This is our "new" component. We utilized the corrplot package and library to visualize a correlation matrix featuring the quantitative variables. The method parameter determines how the correlations are visually represented in the plot. We selected the "ellipse" method where the shape and orientation of the ellipses represent the strength and direction of the correlations. A perfectly circular ellipse represents no correlation while the elongated ellipses indicate stronger correlations. The direction of the elongation shows whether the correlation is positive or negative. Next, we set the order parameter to "hclust". The variables are grouped into clusters based on their correlation and then ordered according to these clusters instead of the order in which they appear in the matrix.
+
+```{r Correlation Analysis}
+# Correlation Analysis
+quantitative_vars <- stormsData %>%
+  select(wind, pressure, hurricane_force_diameter)
+
+correlation_matrix <- cor(quantitative_vars, use = "complete.obs")
+
+correlation_matrix
+
+par(mar = c(7, 4, 7, 2)) 
+
+corrplot(correlation_matrix, 
+         method = "ellipse", 
+         order = "hclust", 
+         diag = F, 
+         tl.cex = 0.8,
+         cl.pos = 'r',
+         tl.srt = 45)
+
+mtext("Pressure, Wind, Diameter Correlation Matrix", 
+      side = 3, 
+      line = 5, 
+      cex = 1, 
+      font = 2, 
+      adj = 0.5)
+```
+
+Interpretation of the Correlation Matrix:
+
+**wind/pressure:**  Strong negative correlation. As wind speeds increase, pressure tends to decrease.
+
+**wind/hurricane_force_diameter:** Weak to moderate positive correlation. As wind speeds increase, the diameter of hurricane force winds also tends to increase.
+
+**pressure/hurricane_force_diameter:** Moderate negative correlation. As pressure decreases, the diameter of hurricane-force winds tends to increase. But this is not as strong as the correlation between wind and pressure.
+
+***
+
+# Trend Analysis
+
+## Category based linear model {#CBLM}
+
+```{r Trend Analysis - Category Linear Model}
+# average hurricane category per year
+avg_category_per_year <- stormsData %>%
+  group_by(year) %>%
+  summarise(avg_category = mean(category, na.rm = TRUE))
+
+# linear model for average category
+model_avg_category <- lm(avg_category ~ year, data = avg_category_per_year)
+
+modelCategoryPerYear_plot <- ggplot(avg_category_per_year, 
+                                    aes(x = year, y = avg_category)) +
+  geom_line() +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Average Hurricane Category by Year with Trend Line", 
+       x = "Year", 
+       y = "Average Hurricane Category") +
+  theme_minimal() + 
+  theme(plot.title = element_text(color = "darkgreen", hjust = 0.5),
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(color = "darkgreen"))
+
+modelCategoryPerYear_plot
+```
+
+## Wind speed based linear model {#WSBLM}
+
+```{r Trend Analysis - Wind Speed Linear Model}
+# linear model for maximum wind speed
+model_wind <- lm(max_wind ~ year, data = max_wind_per_year)
+
+modelWindSpeedPerYear_plot <- ggplot(max_wind_per_year, 
+                                     aes(x = year, y = max_wind)) +
+  geom_line() +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Maximum Wind Speed of Hurricanes by Year with Trend Line",
+       x = "Year", 
+       y = "Maximum Wind Speed (knots)") +
+  theme_minimal() + 
+  theme(plot.title = element_text(color = "darkgreen", hjust = 0.5),
+        axis.title = element_text(color = "darkgreen"), 
+        legend.title = element_text(color = "darkgreen"))
+
+modelWindSpeedPerYear_plot
+```
+
+***
+
+# Conclusion
+
+```{r Conclusion Calculations}
+# averages by category
+avg_cat_1975 <- avg_category_per_year %>%
+  filter(year == 1975) %>%
+  pull(avg_category) %>%
+  round(2)
+
+avg_cat_2020 <- avg_category_per_year %>%
+  filter(year == 2020) %>%
+  pull(avg_category) %>%
+  round(2)
+
+# averages by wind speed
+avg_wind_per_year <- stormsData %>%
+  group_by(year) %>%
+  summarise(avg_wind_speed = mean(wind, na.rm = TRUE))
+
+avg_wind_1975 <- avg_wind_per_year %>%
+  filter(year == 1975) %>%
+  pull(avg_wind_speed) %>%
+  round(2)
+
+avg_wind_2020 <- avg_wind_per_year %>%
+  filter(year == 2020) %>%
+  pull(avg_wind_speed) %>%
+  round(2)
+
+# % change calculations
+percentage_change <- function(new_value, old_value) {
+  sprintf("%.0f%%", 
+          round(( (new_value - old_value) / old_value) * 100, 0))
+}
+
+avg_cat_change <- percentage_change(avg_cat_2020, avg_cat_1975)
+
+avg_wind_change <- percentage_change(avg_wind_2020, avg_wind_1975)
+```
+
+After reviewing the data, we can see a clear increase in the intensity of hurricanes between 1975 - 2022. Both our [Category Based](#CBLM) and [Wind Speed Based](#WSBLM) models show an upward trend in their respective metrics. The average hurricane category has increased from `r avg_cat_1975` to `r avg_cat_2020`, approximately `r avg_cat_change`, while the average hurricane windspeed has increased from `r avg_wind_1975` to `r avg_wind_2020` knots, approximately `r avg_wind_change`.
+
+<br><br>
+<center>![](hurricane_irma_image.webp)</center>
+<br><br>
+<center>Project by Diana Klinger '24 and [Conie O'Malley](https://www.linkedin.com/in/conor-e-o-malley/) '25
